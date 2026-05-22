@@ -14,7 +14,6 @@ import {
   Link as LinkIcon,
   Upload,
   ShieldAlert,
-  FileCheck,
 } from "lucide-react";
 
 const SAMPLES = [
@@ -50,6 +49,13 @@ interface AnalysisResult {
   legal_basis: string[];
   advice: string;
   _originalText?: string;
+}
+
+// 이미지 미리보기/전송용 데이터
+interface ImgItem {
+  dataUrl: string; // 미리보기용 (data:image/...;base64,xxx)
+  base64: string; // 전송용 (base64만)
+  mediaType: string; // image/jpeg 등
 }
 
 function ScoreBar({
@@ -99,35 +105,114 @@ function ScoreBar({
 export default function Home() {
   const [mode, setMode] = useState<"text" | "image" | "url">("text");
   const [input, setInput] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [images, setImages] = useState<ImgItem[]>([]);
+  const [converting, setConverting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const fileToBase64 = (f: File): Promise<string> =>
+  // 파일(이미지 여러 장 또는 PDF) 처리
+  const handleFiles = async (files: FileList) => {
+    setError(null);
+    setConverting(true);
+    try {
+      const newImgs: ImgItem[] = [];
+
+      for (const file of Array.from(files)) {
+        if (file.type === "application/pdf") {
+          // PDF → 페이지별 이미지로 변환
+          const pdfImgs = await pdfToImages(file);
+          newImgs.push(...pdfImgs);
+        } else if (file.type.startsWith("image/")) {
+          // 일반 이미지
+          const dataUrl = await readAsDataURL(file);
+          newImgs.push({
+            dataUrl,
+            base64: dataUrl.split(",")[1],
+            mediaType: file.type,
+          });
+        }
+      }
+
+      setImages((prev) => [...prev, ...newImgs]);
+    } catch (e) {
+      console.error(e);
+      setError("파일을 읽는 중 오류가 발생했어요. 다시 시도해주세요.");
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  const readAsDataURL = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => {
-        const res = reader.result as string;
-        resolve(res.split(",")[1]);
-      };
+      reader.onload = () => resolve(reader.result as string);
       reader.onerror = reject;
-      reader.readAsDataURL(f);
+      reader.readAsDataURL(file);
     });
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setFile(f);
-    if (f.type === "application/pdf") {
-      setFilePreview("pdf");
-    } else {
-      const reader = new FileReader();
-      reader.onload = () => setFilePreview(reader.result as string);
-      reader.readAsDataURL(f);
+  // PDF를 페이지별 JPEG 이미지로 변환 (긴 페이지는 세로로 잘라서 여러 장)
+  const pdfToImages = async (file: File): Promise<ImgItem[]> => {
+    const pdfjsLib = await import("pdfjs-dist");
+    // worker 설정 (CDN)
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const out: ImgItem[] = [];
+
+    const MAX_SLICE_HEIGHT = 1600; // 한 조각의 최대 세로 픽셀
+
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.5 });
+
+      // 페이지 전체를 캔버스에 렌더
+      const fullCanvas = document.createElement("canvas");
+      fullCanvas.width = viewport.width;
+      fullCanvas.height = viewport.height;
+      const ctx = fullCanvas.getContext("2d");
+      if (!ctx) continue;
+      await page.render({ canvasContext: ctx, viewport, canvas: fullCanvas }).promise;
+
+      // 너무 길면 세로로 잘라서 여러 조각으로
+      const totalHeight = fullCanvas.height;
+      let y = 0;
+      while (y < totalHeight) {
+        const sliceHeight = Math.min(MAX_SLICE_HEIGHT, totalHeight - y);
+        const sliceCanvas = document.createElement("canvas");
+        sliceCanvas.width = fullCanvas.width;
+        sliceCanvas.height = sliceHeight;
+        const sctx = sliceCanvas.getContext("2d");
+        if (sctx) {
+          sctx.drawImage(
+            fullCanvas,
+            0,
+            y,
+            fullCanvas.width,
+            sliceHeight,
+            0,
+            0,
+            fullCanvas.width,
+            sliceHeight
+          );
+          const dataUrl = sliceCanvas.toDataURL("image/jpeg", 0.8);
+          out.push({
+            dataUrl,
+            base64: dataUrl.split(",")[1],
+            mediaType: "image/jpeg",
+          });
+        }
+        y += sliceHeight;
+      }
     }
+
+    return out;
+  };
+
+  const removeImage = (idx: number) => {
+    setImages((prev) => prev.filter((_, i) => i !== idx));
   };
 
   const analyze = async (textOverride?: string) => {
@@ -136,13 +221,18 @@ export default function Home() {
     setResult(null);
 
     try {
-      const payload: { text?: string; fileBase64?: string; fileType?: string } = {};
+      const payload: {
+        text?: string;
+        images?: { base64: string; mediaType: string }[];
+      } = {};
       let originalForDisplay = "";
 
-      if (mode === "image" && file) {
-        payload.fileBase64 = await fileToBase64(file);
-        payload.fileType = file.type;
-        originalForDisplay = file.type === "application/pdf" ? "[PDF 분석]" : "[이미지 분석]";
+      if (mode === "image" && images.length > 0) {
+        payload.images = images.map((img) => ({
+          base64: img.base64,
+          mediaType: img.mediaType,
+        }));
+        originalForDisplay = `[이미지 ${images.length}장 분석]`;
       } else {
         const target = textOverride ?? input;
         if (!target.trim()) {
@@ -175,12 +265,15 @@ export default function Home() {
     setResult(null);
     setError(null);
     setInput("");
-    setFile(null);
-    setFilePreview(null);
+    setImages([]);
   };
 
   const canAnalyze =
-    mode === "text" ? input.trim().length > 0 : mode === "image" ? !!file : false;
+    mode === "text"
+      ? input.trim().length > 0
+      : mode === "image"
+      ? images.length > 0 && !converting
+      : false;
 
   const verdictColor =
     result?.verdict === "고위험 표현"
@@ -280,79 +373,85 @@ export default function Home() {
                 {mode === "image" && (
                   <>
                     <label className="font-body text-xs tracking-wider text-stone-500 mb-3 block">
-                      광고 페이지 캡처 이미지 또는 PDF를 업로드하세요
+                      광고 캡처 이미지(여러 장 가능) 또는 PDF를 업로드하세요
                     </label>
                     <input
                       type="file"
                       ref={fileInputRef}
                       accept="image/*,application/pdf"
-                      onChange={handleFileChange}
+                      multiple
+                      onChange={(e) => e.target.files && handleFiles(e.target.files)}
                       className="hidden"
                     />
-                    {!filePreview ? (
-                      <>
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="w-full border-2 border-dashed border-stone-300 hover:border-stone-900 bg-stone-50 transition-colors p-8 md:p-12 flex flex-col items-center justify-center gap-2"
-                          style={{ borderRadius: "2px" }}
-                        >
+
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={converting}
+                      className="w-full border-2 border-dashed border-stone-300 hover:border-stone-900 bg-stone-50 transition-colors p-6 md:p-8 flex flex-col items-center justify-center gap-2 disabled:opacity-50"
+                      style={{ borderRadius: "2px" }}
+                    >
+                      {converting ? (
+                        <>
+                          <div className="spin w-6 h-6 border-2 border-stone-400 border-t-transparent rounded-full" />
+                          <span className="font-body text-sm text-stone-700">
+                            파일을 처리하는 중...
+                          </span>
+                        </>
+                      ) : (
+                        <>
                           <Upload size={28} className="text-stone-500" strokeWidth={1.5} />
                           <span className="font-body text-sm text-stone-700">
-                            이미지 또는 PDF를 선택하거나 클릭
+                            이미지(여러 장) 또는 PDF 선택
                           </span>
                           <span className="font-body text-xs text-stone-500">
-                            긴 광고 페이지는 전체 캡처(PDF)로 한 번에!
+                            긴 PDF는 자동으로 나눠서 분석해요
                           </span>
-                        </button>
-                        <div
-                          className="mt-3 border-l-4 border-stone-400 bg-stone-50 p-3"
-                          style={{ borderRadius: "2px" }}
-                        >
-                          <p className="font-body text-xs text-stone-600 leading-relaxed">
-                            <strong>📱 아이폰</strong>: 사파리에서 스크린샷 → 미리보기 → "전체
-                            페이지" → PDF 저장 후 업로드
-                            <br />
-                            <strong>📱 갤럭시</strong>: 스크린샷 → "스크롤 캡처"로 전체 캡처 후
-                            업로드
-                            <br />
-                            <strong>💻 PC</strong>: GoFullPage 확장으로 전체 캡처 후 업로드
-                          </p>
+                        </>
+                      )}
+                    </button>
+
+                    {/* 업로드된 이미지 미리보기 */}
+                    {images.length > 0 && (
+                      <div className="mt-4">
+                        <p className="font-body text-xs text-stone-500 mb-2">
+                          업로드됨: {images.length}장
+                        </p>
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                          {images.map((img, i) => (
+                            <div key={i} className="relative group">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={img.dataUrl}
+                                alt={`광고 ${i + 1}`}
+                                className="w-full h-24 object-cover border border-stone-300"
+                                style={{ borderRadius: "2px" }}
+                              />
+                              <button
+                                onClick={() => removeImage(i)}
+                                className="absolute top-1 right-1 bg-stone-900 text-white p-1 hover:bg-stone-700"
+                                style={{ borderRadius: "2px" }}
+                              >
+                                <X size={10} />
+                              </button>
+                            </div>
+                          ))}
                         </div>
-                      </>
-                    ) : (
-                      <div className="relative">
-                        {filePreview === "pdf" ? (
-                          <div
-                            className="w-full border border-stone-300 bg-stone-50 p-8 flex flex-col items-center justify-center gap-2"
-                            style={{ borderRadius: "2px" }}
-                          >
-                            <FileCheck size={40} className="text-stone-700" strokeWidth={1.5} />
-                            <span className="font-body text-sm text-stone-700">
-                              PDF 파일이 업로드되었습니다
-                            </span>
-                            <span className="font-body text-xs text-stone-500">{file?.name}</span>
-                          </div>
-                        ) : (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={filePreview}
-                            alt="업로드된 광고"
-                            className="w-full max-h-96 object-contain border border-stone-300 bg-stone-50"
-                            style={{ borderRadius: "2px" }}
-                          />
-                        )}
-                        <button
-                          onClick={() => {
-                            setFile(null);
-                            setFilePreview(null);
-                          }}
-                          className="absolute top-2 right-2 bg-stone-900 text-white p-1.5 hover:bg-stone-700"
-                          style={{ borderRadius: "2px" }}
-                        >
-                          <X size={14} />
-                        </button>
                       </div>
                     )}
+
+                    <div
+                      className="mt-3 border-l-4 border-stone-400 bg-stone-50 p-3"
+                      style={{ borderRadius: "2px" }}
+                    >
+                      <p className="font-body text-xs text-stone-600 leading-relaxed">
+                        <strong>📱 아이폰</strong>: 사파리에서 스크린샷 → "전체 페이지" → PDF 저장 후
+                        업로드 (자동 분할됨)
+                        <br />
+                        <strong>📱 갤럭시</strong>: 스크롤 캡처로 전체 캡처 후 업로드
+                        <br />
+                        <strong>💻 PC</strong>: GoFullPage 확장으로 전체 캡처 후 업로드
+                      </p>
+                    </div>
                   </>
                 )}
 
@@ -441,7 +540,7 @@ export default function Home() {
 
         {error && (
           <div
-            className="border border-red-300 bg-red-50 p-4 font-body text-sm text-red-900"
+            className="border border-red-300 bg-red-50 p-4 font-body text-sm text-red-900 mb-6"
             style={{ borderRadius: "2px" }}
           >
             {error}
@@ -559,8 +658,7 @@ export default function Home() {
             </section>
 
             {result._originalText &&
-              result._originalText !== "[이미지 분석]" &&
-              result._originalText !== "[PDF 분석]" && (
+              !result._originalText.startsWith("[이미지") && (
                 <section className="mb-8">
                   <p className="font-body text-xs tracking-wider text-stone-500 mb-2">
                     분석한 원문

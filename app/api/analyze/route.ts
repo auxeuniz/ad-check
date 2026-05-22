@@ -6,6 +6,7 @@ const SYSTEM_PROMPT = `당신은 한국 「표시·광고의 공정화에 관한
 - 당신의 임무는 광고에 사용된 **표현·문구의 위험도**를 평가하는 것입니다.
 - 특정 제품/브랜드의 유죄·무죄를 단정하지 마세요.
 - 제품명/브랜드명/판매자명을 결과에 포함하지 마세요. 분석 대상은 "표현"입니다.
+- 여러 이미지가 제공되면, 모두 하나의 광고 페이지로 보고 종합하여 분석하세요.
 
 [분석 4축]
 1. 절대 표현 - "100%", "무조건", "유일", "최초", "보장" 같은 표현
@@ -38,10 +39,18 @@ const SYSTEM_PROMPT = `당신은 한국 「표시·광고의 공정화에 관한
   "advice": "소비자에게 주는 실용적 조언 2~3문장"
 }`;
 
+interface ImageInput {
+  base64: string;
+  mediaType: string;
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { text, fileBase64, fileType } = body;
+    const { text, images } = body as {
+      text?: string;
+      images?: ImageInput[];
+    };
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -51,35 +60,29 @@ export async function POST(request: Request) {
       );
     }
 
-    let messageContent;
-    // 기본 모델은 저렴한 Haiku. PDF만 Sonnet 사용 (PDF 읽기 지원)
+    // 이미지는 비전 지원 모델(Sonnet) 사용, 텍스트만이면 저렴한 Haiku
     let model = "claude-haiku-4-5-20251001";
+    let messageContent;
 
-    if (fileBase64 && fileType) {
-      if (fileType === "application/pdf") {
-        model = "claude-sonnet-4-5-20250929"; // PDF는 Sonnet
-        messageContent = [
-          {
-            type: "document",
-            source: { type: "base64", media_type: "application/pdf", data: fileBase64 },
-          },
-          {
-            type: "text",
-            text: `${SYSTEM_PROMPT}\n\n[분석 대상]\n첨부 PDF는 광고 페이지 전체를 캡처한 것입니다. PDF 안의 모든 광고 문구를 읽어 종합 분석하세요.`,
-          },
-        ];
-      } else {
-        messageContent = [
-          {
-            type: "image",
-            source: { type: "base64", media_type: fileType, data: fileBase64 },
-          },
-          {
-            type: "text",
-            text: `${SYSTEM_PROMPT}\n\n[분석 대상]\n첨부 이미지는 광고 스크린샷입니다. 이미지에서 광고 문구를 읽어 분석하세요.`,
-          },
-        ];
-      }
+    if (images && images.length > 0) {
+      model = "claude-sonnet-4-5-20250929";
+      // 안전을 위해 최대 20장으로 제한
+      const limited = images.slice(0, 20);
+      const imageBlocks = limited.map((img) => ({
+        type: "image" as const,
+        source: {
+          type: "base64" as const,
+          media_type: img.mediaType,
+          data: img.base64,
+        },
+      }));
+      messageContent = [
+        ...imageBlocks,
+        {
+          type: "text" as const,
+          text: `${SYSTEM_PROMPT}\n\n[분석 대상]\n첨부된 ${limited.length}장의 이미지는 하나의 광고 페이지를 캡처/분할한 것입니다. 모든 이미지의 광고 문구를 읽어 종합 분석하세요.`,
+        },
+      ];
     } else if (text) {
       messageContent = `${SYSTEM_PROMPT}\n\n[분석할 광고 문구]\n${text}`;
     } else {
@@ -106,10 +109,7 @@ export async function POST(request: Request) {
     if (!response.ok) {
       const errText = await response.text();
       console.error("Anthropic API error:", errText);
-      return NextResponse.json(
-        { error: "AI 분석 실패" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "AI 분석 실패" }, { status: 500 });
     }
 
     const data = await response.json();
