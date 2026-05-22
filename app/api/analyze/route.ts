@@ -52,10 +52,12 @@ export async function POST(request: Request) {
     }
 
     let messageContent;
+    // 기본 모델은 저렴한 Haiku. PDF만 Sonnet 사용 (PDF 읽기 지원)
+    let model = "claude-haiku-4-5-20251001";
 
     if (fileBase64 && fileType) {
-      // PDF인지 이미지인지 구분
       if (fileType === "application/pdf") {
+        model = "claude-sonnet-4-5-20250929"; // PDF는 Sonnet
         messageContent = [
           {
             type: "document",
@@ -95,7 +97,7 @@ export async function POST(request: Request) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        model: model,
         max_tokens: 1500,
         messages: [{ role: "user", content: messageContent }],
       }),
