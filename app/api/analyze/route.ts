@@ -41,7 +41,7 @@ const SYSTEM_PROMPT = `당신은 한국 「표시·광고의 공정화에 관한
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { text, imageBase64, imageType } = body;
+    const { text, fileBase64, fileType } = body;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -52,17 +52,32 @@ export async function POST(request: Request) {
     }
 
     let messageContent;
-    if (imageBase64 && imageType) {
-      messageContent = [
-        {
-          type: "image",
-          source: { type: "base64", media_type: imageType, data: imageBase64 },
-        },
-        {
-          type: "text",
-          text: `${SYSTEM_PROMPT}\n\n[분석 대상]\n첨부 이미지는 광고 스크린샷입니다. 이미지에서 광고 문구를 읽어 분석하세요.`,
-        },
-      ];
+
+    if (fileBase64 && fileType) {
+      // PDF인지 이미지인지 구분
+      if (fileType === "application/pdf") {
+        messageContent = [
+          {
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: fileBase64 },
+          },
+          {
+            type: "text",
+            text: `${SYSTEM_PROMPT}\n\n[분석 대상]\n첨부 PDF는 광고 페이지 전체를 캡처한 것입니다. PDF 안의 모든 광고 문구를 읽어 종합 분석하세요.`,
+          },
+        ];
+      } else {
+        messageContent = [
+          {
+            type: "image",
+            source: { type: "base64", media_type: fileType, data: fileBase64 },
+          },
+          {
+            type: "text",
+            text: `${SYSTEM_PROMPT}\n\n[분석 대상]\n첨부 이미지는 광고 스크린샷입니다. 이미지에서 광고 문구를 읽어 분석하세요.`,
+          },
+        ];
+      }
     } else if (text) {
       messageContent = `${SYSTEM_PROMPT}\n\n[분석할 광고 문구]\n${text}`;
     } else {

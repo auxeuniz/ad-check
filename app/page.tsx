@@ -14,6 +14,7 @@ import {
   Link as LinkIcon,
   Upload,
   ShieldAlert,
+  FileCheck,
 } from "lucide-react";
 
 const SAMPLES = [
@@ -98,31 +99,35 @@ function ScoreBar({
 export default function Home() {
   const [mode, setMode] = useState<"text" | "image" | "url">("text");
   const [input, setInput] = useState("");
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const fileToBase64 = (file: File): Promise<string> =>
+  const fileToBase64 = (f: File): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
-        const result = reader.result as string;
-        resolve(result.split(",")[1]);
+        const res = reader.result as string;
+        resolve(res.split(",")[1]);
       };
       reader.onerror = reject;
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(f);
     });
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImageFile(file);
-    const reader = new FileReader();
-    reader.onload = () => setImagePreview(reader.result as string);
-    reader.readAsDataURL(file);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    if (f.type === "application/pdf") {
+      setFilePreview("pdf");
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => setFilePreview(reader.result as string);
+      reader.readAsDataURL(f);
+    }
   };
 
   const analyze = async (textOverride?: string) => {
@@ -131,13 +136,13 @@ export default function Home() {
     setResult(null);
 
     try {
-      const payload: { text?: string; imageBase64?: string; imageType?: string } = {};
+      const payload: { text?: string; fileBase64?: string; fileType?: string } = {};
       let originalForDisplay = "";
 
-      if (mode === "image" && imageFile) {
-        payload.imageBase64 = await fileToBase64(imageFile);
-        payload.imageType = imageFile.type;
-        originalForDisplay = "[이미지 분석]";
+      if (mode === "image" && file) {
+        payload.fileBase64 = await fileToBase64(file);
+        payload.fileType = file.type;
+        originalForDisplay = file.type === "application/pdf" ? "[PDF 분석]" : "[이미지 분석]";
       } else {
         const target = textOverride ?? input;
         if (!target.trim()) {
@@ -170,12 +175,12 @@ export default function Home() {
     setResult(null);
     setError(null);
     setInput("");
-    setImageFile(null);
-    setImagePreview(null);
+    setFile(null);
+    setFilePreview(null);
   };
 
   const canAnalyze =
-    mode === "text" ? input.trim().length > 0 : mode === "image" ? !!imageFile : false;
+    mode === "text" ? input.trim().length > 0 : mode === "image" ? !!file : false;
 
   const verdictColor =
     result?.verdict === "고위험 표현"
@@ -234,7 +239,7 @@ export default function Home() {
               <div className="flex border-b border-stone-300">
                 {[
                   { id: "text" as const, icon: Type, label: "문구 입력" },
-                  { id: "image" as const, icon: ImageIcon, label: "스크린샷 업로드" },
+                  { id: "image" as const, icon: ImageIcon, label: "캡처/PDF 업로드" },
                   { id: "url" as const, icon: LinkIcon, label: "URL (베타)" },
                 ].map((tab) => (
                   <button
@@ -275,42 +280,71 @@ export default function Home() {
                 {mode === "image" && (
                   <>
                     <label className="font-body text-xs tracking-wider text-stone-500 mb-3 block">
-                      상품 상세페이지 스크린샷을 업로드하세요
+                      광고 페이지 캡처 이미지 또는 PDF를 업로드하세요
                     </label>
                     <input
                       type="file"
                       ref={fileInputRef}
-                      accept="image/*"
-                      onChange={handleImageChange}
+                      accept="image/*,application/pdf"
+                      onChange={handleFileChange}
                       className="hidden"
                     />
-                    {!imagePreview ? (
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="w-full border-2 border-dashed border-stone-300 hover:border-stone-900 bg-stone-50 transition-colors p-8 md:p-12 flex flex-col items-center justify-center gap-2"
-                        style={{ borderRadius: "2px" }}
-                      >
-                        <Upload size={28} className="text-stone-500" strokeWidth={1.5} />
-                        <span className="font-body text-sm text-stone-700">
-                          이미지를 선택하거나 클릭
-                        </span>
-                        <span className="font-body text-xs text-stone-500">
-                          광고 문구가 보이는 영역을 캡처해 주세요
-                        </span>
-                      </button>
+                    {!filePreview ? (
+                      <>
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="w-full border-2 border-dashed border-stone-300 hover:border-stone-900 bg-stone-50 transition-colors p-8 md:p-12 flex flex-col items-center justify-center gap-2"
+                          style={{ borderRadius: "2px" }}
+                        >
+                          <Upload size={28} className="text-stone-500" strokeWidth={1.5} />
+                          <span className="font-body text-sm text-stone-700">
+                            이미지 또는 PDF를 선택하거나 클릭
+                          </span>
+                          <span className="font-body text-xs text-stone-500">
+                            긴 광고 페이지는 전체 캡처(PDF)로 한 번에!
+                          </span>
+                        </button>
+                        <div
+                          className="mt-3 border-l-4 border-stone-400 bg-stone-50 p-3"
+                          style={{ borderRadius: "2px" }}
+                        >
+                          <p className="font-body text-xs text-stone-600 leading-relaxed">
+                            <strong>📱 아이폰</strong>: 사파리에서 스크린샷 → 미리보기 → "전체
+                            페이지" → PDF 저장 후 업로드
+                            <br />
+                            <strong>📱 갤럭시</strong>: 스크린샷 → "스크롤 캡처"로 전체 캡처 후
+                            업로드
+                            <br />
+                            <strong>💻 PC</strong>: GoFullPage 확장으로 전체 캡처 후 업로드
+                          </p>
+                        </div>
+                      </>
                     ) : (
                       <div className="relative">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={imagePreview}
-                          alt="업로드된 광고"
-                          className="w-full max-h-96 object-contain border border-stone-300 bg-stone-50"
-                          style={{ borderRadius: "2px" }}
-                        />
+                        {filePreview === "pdf" ? (
+                          <div
+                            className="w-full border border-stone-300 bg-stone-50 p-8 flex flex-col items-center justify-center gap-2"
+                            style={{ borderRadius: "2px" }}
+                          >
+                            <FileCheck size={40} className="text-stone-700" strokeWidth={1.5} />
+                            <span className="font-body text-sm text-stone-700">
+                              PDF 파일이 업로드되었습니다
+                            </span>
+                            <span className="font-body text-xs text-stone-500">{file?.name}</span>
+                          </div>
+                        ) : (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={filePreview}
+                            alt="업로드된 광고"
+                            className="w-full max-h-96 object-contain border border-stone-300 bg-stone-50"
+                            style={{ borderRadius: "2px" }}
+                          />
+                        )}
                         <button
                           onClick={() => {
-                            setImageFile(null);
-                            setImagePreview(null);
+                            setFile(null);
+                            setFilePreview(null);
                           }}
                           className="absolute top-2 right-2 bg-stone-900 text-white p-1.5 hover:bg-stone-700"
                           style={{ borderRadius: "2px" }}
@@ -333,7 +367,7 @@ export default function Home() {
                     <p className="font-body text-xs text-amber-900 leading-relaxed">
                       국내 쇼핑몰은 대부분 광고 핵심 문구를 이미지에 담아두기 때문에,
                       <br />
-                      현재는 <strong>스크린샷 업로드</strong> 또는{" "}
+                      현재는 <strong>캡처/PDF 업로드</strong> 또는{" "}
                       <strong>문구 직접 입력</strong>을 권장합니다.
                     </p>
                   </div>
@@ -524,17 +558,21 @@ export default function Home() {
               </ul>
             </section>
 
-            {result._originalText && result._originalText !== "[이미지 분석]" && (
-              <section className="mb-8">
-                <p className="font-body text-xs tracking-wider text-stone-500 mb-2">분석한 원문</p>
-                <div
-                  className="p-4 bg-stone-100 border border-stone-300 font-body text-sm text-stone-700 leading-relaxed"
-                  style={{ borderRadius: "2px" }}
-                >
-                  {result._originalText}
-                </div>
-              </section>
-            )}
+            {result._originalText &&
+              result._originalText !== "[이미지 분석]" &&
+              result._originalText !== "[PDF 분석]" && (
+                <section className="mb-8">
+                  <p className="font-body text-xs tracking-wider text-stone-500 mb-2">
+                    분석한 원문
+                  </p>
+                  <div
+                    className="p-4 bg-stone-100 border border-stone-300 font-body text-sm text-stone-700 leading-relaxed"
+                    style={{ borderRadius: "2px" }}
+                  >
+                    {result._originalText}
+                  </div>
+                </section>
+              )}
           </div>
         )}
       </main>
