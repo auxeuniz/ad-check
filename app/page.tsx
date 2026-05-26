@@ -276,9 +276,9 @@ export default function Home() {
       : false;
 
   const verdictColor =
-    result?.verdict === "고위험 표현"
+    result?.verdict === "각별한 주의 필요"
       ? "#A8201A"
-      : result?.verdict === "주의 필요 표현"
+      : result?.verdict === "주의 필요"
       ? "#C97B22"
       : "#2C6E49";
 
@@ -573,6 +573,9 @@ export default function Home() {
             <div className="text-center mb-12 pb-12 border-b-2 border-stone-900">
               <p className="font-body text-xs tracking-[0.4em] text-stone-500 mb-4">
                 진단 결과 · {result.category} 카테고리
+              </p>
+              <p className="font-display text-lg md:text-xl font-bold text-stone-700 mb-2">
+                소비자 주의 필요도
               </p>
               <div className="mb-2">
                 <span
