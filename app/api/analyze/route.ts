@@ -159,7 +159,7 @@ async function runWithWebSearch(
       },
       body: JSON.stringify({
         model,
-        max_tokens: 1500,
+        max_tokens: 3000,
         tools,
         system: SYSTEM_PROMPT,
         messages,
