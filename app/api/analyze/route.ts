@@ -220,7 +220,7 @@ export async function POST(request: Request) {
 
     if (images && images.length > 0) {
       model = "claude-sonnet-4-5-20250929";
-      const limited = images.slice(0, 20);
+      const limited = images.slice(0, 10);
       const imageBlocks = limited.map((img) => ({
         type: "image" as const,
         source: { type: "base64" as const, media_type: img.mediaType, data: img.base64 },
