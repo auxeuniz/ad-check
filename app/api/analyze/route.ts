@@ -1,10 +1,5 @@
 import { NextResponse } from "next/server";
 
-// ─────────────────────────────────────────────
-// 공정거래위원회 표시·광고 금지 표현 목록
-// 근거: 표시·광고의 공정화에 관한 법률 제3조,
-//       공정거래위원회 고시 「부당한 표시·광고 행위의 유형 및 기준」
-// ─────────────────────────────────────────────
 const FTC_PROHIBITED = `
 [공정거래위원회 금지 표현 기준]
 
@@ -38,9 +33,6 @@ const FTC_PROHIBITED = `
 - "10년이 젊어지는", "주름 완전 제거"
 `;
 
-// ─────────────────────────────────────────────
-// 메인 시스템 프롬프트
-// ─────────────────────────────────────────────
 const SYSTEM_PROMPT = `당신은 한국 「표시·광고의 공정화에 관한 법률」 전문 분석가입니다.
 아래 공정거래위원회 금지 표현 기준과 웹 검색 결과를 바탕으로 광고 표현을 분석합니다.
 
@@ -135,27 +127,28 @@ interface ImageInput {
   mediaType: string;
 }
 
-// ─────────────────────────────────────────────
-// 웹서치 tool use 멀티턴 처리
-// ─────────────────────────────────────────────
+type ContentBlock = {
+  type: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+};
+
+type Message = {
+  role: string;
+  content: unknown;
+};
+
 async function runWithWebSearch(
   apiKey: string,
   model: string,
   messageContent: unknown
 ): Promise<string> {
-  const tools = [
-    {
-      type: "web_search_20250305",
-      name: "web_search",
-    },
-  ];
+  const tools = [{ type: "web_search_20250305", name: "web_search" }];
+  const messages: Message[] = [{ role: "user", content: messageContent }];
 
-  let messages: { role: string; content: unknown }[] = [
-    { role: "user", content: messageContent },
-  ];
-
-  // 최대 5번 루프 (웹서치 → 결과 반영 → 최종 응답)
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 8; i++) {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -168,8 +161,8 @@ async function runWithWebSearch(
         model,
         max_tokens: 2000,
         tools,
-        messages,
         system: SYSTEM_PROMPT,
+        messages,
       }),
     });
 
@@ -179,42 +172,43 @@ async function runWithWebSearch(
     }
 
     const data = await response.json();
-    const { content, stop_reason } = data;
+    const content: ContentBlock[] = data.content;
+    const stop_reason: string = data.stop_reason;
 
-    // 최종 응답이면 텍스트 추출 후 반환
+    // 최종 응답: 텍스트 블록만 모아서 반환
     if (stop_reason === "end_turn") {
-      return content
-        .map((c: { type: string; text?: string }) =>
-          c.type === "text" ? c.text || "" : ""
-        )
+      const text = content
+        .filter((c) => c.type === "text")
+        .map((c) => c.text || "")
         .join("");
+      if (!text) throw new Error("응답에 텍스트 없음");
+      return text;
     }
 
-    // tool_use면 검색 결과를 messages에 추가하고 계속
+    // 웹서치 실행 중: assistant 응답을 messages에 추가하고 계속
     if (stop_reason === "tool_use") {
       messages.push({ role: "assistant", content });
 
-      const toolResults = content
-        .filter((c: { type: string }) => c.type === "tool_use")
-        .map((c: { id: string; name: string; input: unknown }) => ({
-          type: "tool_result",
-          tool_use_id: c.id,
-          content: `웹 검색 실행: ${JSON.stringify(c.input)}`,
-        }));
+      // tool_result는 Anthropic이 자동으로 처리하므로
+      // 빈 user 메시지로 계속 진행
+      const toolUseBlocks = content.filter((c) => c.type === "tool_use");
+      const toolResults = toolUseBlocks.map((c) => ({
+        type: "tool_result",
+        tool_use_id: c.id,
+        content: "검색을 완료했습니다. 결과를 바탕으로 분석을 계속하세요.",
+      }));
 
       messages.push({ role: "user", content: toolResults });
-    } else {
-      // 예상치 못한 stop_reason이면 종료
-      break;
+      continue;
     }
+
+    // 예상치 못한 stop_reason
+    throw new Error(`예상치 못한 stop_reason: ${stop_reason}`);
   }
 
   throw new Error("웹서치 루프 최대 횟수 초과");
 }
 
-// ─────────────────────────────────────────────
-// API Route Handler
-// ─────────────────────────────────────────────
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -235,7 +229,6 @@ export async function POST(request: Request) {
     let messageContent: unknown;
 
     if (images && images.length > 0) {
-      // 이미지 분석은 Sonnet 사용
       model = "claude-sonnet-4-5-20250929";
       const limited = images.slice(0, 20);
       const imageBlocks = limited.map((img) => ({
@@ -262,7 +255,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // 웹서치 포함 멀티턴 실행
     const raw = await runWithWebSearch(apiKey, model, messageContent);
     const cleaned = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(cleaned);
