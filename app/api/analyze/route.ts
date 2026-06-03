@@ -175,7 +175,7 @@ async function runWithWebSearch(
     const content: ContentBlock[] = data.content;
     const stop_reason: string = data.stop_reason;
 
-    if (stop_reason === "end_turn") {
+    if (stop_reason === "end_turn" || stop_reason === "max_tokens") {
       const text = content
         .filter((c) => c.type === "text")
         .map((c) => c.text || "")
